@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "HoriTieba · 贴吧追评助手",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "minimum_chrome_version": "120",
   "description": "在贴吧列表页自动给每篇新帖评论一次，在帖子页自动回复评论和楼中楼。输入文字，点开始。",
   "permissions": ["storage", "alarms"],

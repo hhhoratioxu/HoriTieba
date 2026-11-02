@@ -2,9 +2,14 @@ import { forumFromUrl } from '../shared/forum-comments';
 import { threadId } from '../shared/validation';
 import { installForumComments } from './forum-comments';
 import { installThreadReplies } from './thread-replies';
-import { readThreadCandidates, hasDraft, useLegacyPage } from '../adapters/tieba/read-page';
+import {
+  readThreadCandidates,
+  hasDraft,
+  useLegacyPage,
+  detectBlockingState,
+} from '../adapters/tieba/read-page';
 import { legacyList, legacyThread } from '../adapters/tieba/legacy';
-import { PageNotReadyError } from '../adapters/platform';
+import { PageNotReadyError, BlockedError, ThreadUnavailableError } from '../adapters/platform';
 import { PageDriver } from '../adapters/tieba/page-driver';
 import { pageRequestSchema } from '../shared/page-messages';
 import { sameExtensionOrigin } from '../shared/extension-origin';
@@ -87,7 +92,18 @@ chrome.runtime.onMessage.addListener((raw, sender, respond) => {
       case 'HORITIEBA_LEGACY': {
         return useLegacyPage(document);
       }
+      case 'HORITIEBA_PAGE_CONTEXT':
+        return {
+          documentToken,
+          draft: hasDraft(document),
+          blocking: detectBlockingState(document),
+        };
       case 'HORITIEBA_INSPECT':
+        if (
+          r.previousDocument === documentToken ||
+          (r.expectedThread && threadId(location.href) !== r.expectedThread)
+        )
+          throw new PageNotReadyError('主题页导航尚未完成，仍是旧页面');
         return {
           documentToken,
           draft: hasDraft(document),
@@ -108,7 +124,13 @@ chrome.runtime.onMessage.addListener((raw, sender, respond) => {
       requestId: r.requestId,
       ok: false,
       error: e instanceof Error ? e.message : '页面操作失败',
-      ...(e instanceof PageNotReadyError ? { code: 'page-not-ready' } : {}),
+      ...(e instanceof PageNotReadyError
+        ? { code: 'page-not-ready' }
+        : e instanceof ThreadUnavailableError
+          ? { code: 'thread-unavailable' }
+          : e instanceof BlockedError
+            ? { code: 'page-blocked' }
+            : {}),
     }),
   );
   return respondToMessage(result, respond);

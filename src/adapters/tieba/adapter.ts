@@ -1,8 +1,9 @@
-import { BlockedError, type PlatformAdapter } from '../platform';
+import { BlockedError, ThreadUnavailableError, type PlatformAdapter } from '../platform';
 import type {
   Account,
   Candidate,
   Config,
+  Scan,
   Run,
   Task,
   Step,
@@ -15,6 +16,7 @@ import type { WorkTabs } from '../../background/work-tabs';
 import type { Repository } from '../../storage/database';
 import { filterThread } from '../../domain/policies';
 import { evidenceFromPage } from './legacy';
+import { listCreationWindow } from './creation-hint';
 export const realCapability = {
   read: '新版只读；自动模式通过官方旧版入口读取列表与主题一楼',
   identity: '顶部个人中心、我的贴吧和侧栏头像/主页 ID 交叉核对；发送前再次确认',
@@ -45,66 +47,139 @@ export class TiebaAdapter implements PlatformAdapter {
     );
     if (!run.baseline || scan.blocking || !scan.reliable || run.config.realAction !== 'auto')
       return scan;
-    let checked = 0;
-    // Bound work per alarm. Pending observations remain eligible for later verification.
-    // Keep checking observed new posts even after they drop off the first list page.
-    const visible = new Map(scan.candidates.map((c) => [c.id, c]));
-    const pending =
-      run.forumTabId === undefined
-        ? []
-        : (await this.repo.db.getAllFromIndex('threads', 'runId', run.id))
-            .filter((t) => t.timeCheckPending && !t.taskId && !t.skipped)
-            .sort((a, b) => a.firstSeen - b.firstSeen);
-    const order = new Map<string, Candidate>();
-    for (const t of pending)
-      order.set(
-        t.id,
-        visible.get(t.id) ?? {
+    const forumRun = run.forumTabId !== undefined;
+    if (
+      scan.forum !== run.config.forum ||
+      !scan.account.confirmed ||
+      scan.account.id !== run.account.id
+    )
+      return { ...scan, blocking: '列表所属贴吧或登录账号已改变' };
+    const selected = await this.planCreationChecks(run, scan, forumRun);
+    for (const c of selected) {
+      if (generation !== this.generation) throw new BlockedError('检查已取消');
+      try {
+        const view = await this.tabs.thread(c.url, forumRun);
+        if (
+          view.draft ||
+          view.page.blocking ||
+          view.page.forum !== run.config.forum ||
+          view.page.threadId !== c.id ||
+          !view.page.account.confirmed ||
+          view.page.account.id !== run.account.id
+        ) {
+          throw new BlockedError(
+            view.draft
+              ? '执行标签页有草稿，已暂停'
+              : view.page.blocking || '主题所属贴吧或登录身份不一致，已停止自动处理',
+          );
+        }
+        if (view.page.publishedAt === undefined) {
+          if (!forumRun) continue;
+        } else {
+          c.publishedAt = view.page.publishedAt;
+          c.timePrecisionMs = 60000;
+          c.timeEvidence = 'verified';
+          c.timeCheckPending = false;
+          delete c.creationCheck;
+          c.timeLabel =
+            new Date(c.publishedAt + 8 * 3600_000).toISOString().slice(0, 16).replace('T', ' ') +
+            '（UTC+8，分钟）';
+          c.source = '贴吧旧版主题一楼的楼层编号与完整创建时间';
+          continue;
+        }
+      } catch (e) {
+        if (e instanceof BlockedError) return { ...scan, blocking: e.message };
+        if (!forumRun) throw e;
+        if (e instanceof ThreadUnavailableError) {
+          c.creationCheck = { kind: 'removed' };
+          c.timeCheckPending = false;
+          continue;
+        }
+      }
+      const attempts = (c.creationCheck?.kind === 'later' ? c.creationCheck.attempts : 0) + 1;
+      c.creationCheck = {
+        kind: 'later',
+        attempts,
+        after: Date.now() + Math.min(300_000, 30_000 * 2 ** Math.min(attempts - 1, 4)),
+      };
+      c.timeCheckPending = true;
+    }
+    scan.coverage += `；本轮查阅 ${selected.length} 篇详情，暂未就绪的主题分开重查`;
+    return scan;
+  }
+  private async planCreationChecks(run: Run, scan: Scan, forumRun: boolean) {
+    const observedAt = Date.now();
+    const visible = new Set(scan.candidates.map((c) => c.id));
+    const pending = forumRun
+      ? (await this.repo.db.getAllFromIndex('threads', 'runId', run.id)).filter(
+          (t) => t.timeCheckPending && !t.taskId && !t.skipped,
+        )
+      : [];
+    const pendingById = new Map(pending.map((t) => [t.id, t]));
+    const candidates = [...scan.candidates];
+    for (const t of pending) {
+      if (!visible.has(t.id))
+        candidates.push({
           id: t.id,
           title: t.title,
           author: t.author,
           authorId: t.authorId,
           url: t.url,
           kind: t.kind,
+          timeLabel: t.timeLabel,
           timeEvidence: 'unavailable',
           timeCheckPending: true,
           source: t.source,
-        },
-      );
-    for (const c of scan.candidates) order.set(c.id, c);
-    for (const c of order.values()) {
-      if (generation !== this.generation) throw new BlockedError('检查已取消');
+        });
+    }
+    const due: { candidate: Candidate; fresh: boolean; dueAt: number }[] = [];
+    for (const c of candidates) {
       if (filterThread(c, run.config)) continue;
-      const prior = await this.repo.db.get('threads', `real:${run.config.forum}:${c.id}`);
+      const prior =
+        pendingById.get(c.id) ??
+        (await this.repo.db.get('threads', `real:${run.config.forum}:${c.id}`));
       if (
         prior &&
         !(prior.runId === run.id && prior.timeCheckPending && !prior.taskId && !prior.skipped)
       )
         continue;
-      if (checked >= 2) break;
-      checked++;
-      const view = await this.tabs.thread(c.url);
-      if (
-        view.page.forum !== run.config.forum ||
-        view.page.threadId !== c.id ||
-        !view.page.account.confirmed ||
-        view.page.account.id !== run.account.id
-      )
-        return { ...scan, blocking: '主题所属贴吧或登录身份不一致，已停止自动处理' };
-      if (view.page.publishedAt !== undefined) {
-        if (!visible.has(c.id)) scan.candidates.push(c);
-        c.publishedAt = view.page.publishedAt;
-        c.timePrecisionMs = 60000;
-        c.timeEvidence = 'verified';
-        c.timeCheckPending = false;
-        c.timeLabel =
-          new Date(c.publishedAt + 8 * 3600_000).toISOString().slice(0, 16).replace('T', ' ') +
-          '（UTC+8，分钟）';
-        c.source = '贴吧旧版主题一楼的楼层编号与完整创建时间';
+      let fresh = false;
+      if (forumRun) {
+        const observedLabel = visible.has(c.id) && !!c.timeLabel;
+        c.labelObservedAt = observedLabel
+          ? observedAt
+          : (prior?.labelObservedAt ?? prior?.firstSeen ?? observedAt);
+        c.timeLabel ||= prior?.timeLabel;
+        const window = listCreationWindow(c.timeLabel, c.labelObservedAt);
+        if (window && window.end <= run.startedAt) {
+          c.creationCheck = { kind: 'old' };
+          c.timeCheckPending = false;
+          // Leave two slots for off-list topics that actually need a detail check.
+          if (!visible.has(c.id) && scan.candidates.length < 198) scan.candidates.push(c);
+          continue;
+        }
+        fresh = !!window && window.start > run.startedAt;
+        c.creationCheck = prior?.creationCheck;
+        if (c.creationCheck?.kind === 'later' && c.creationCheck.after > observedAt) continue;
       }
+      due.push({
+        candidate: c,
+        fresh,
+        dueAt:
+          c.creationCheck?.kind === 'later'
+            ? c.creationCheck.after
+            : (prior?.firstSeen ?? observedAt),
+      });
     }
-    scan.coverage += `；本次核实 ${checked} 个主题，待核实项保留到后续检查`;
-    return scan;
+    // Give one slot to a likely new topic and one to the oldest other observation.
+    // An off-list topic or a retry keeps its place even when the forum is busy.
+    due.sort((a, b) => a.dueAt - b.dueAt);
+    const preferred = due.findIndex((item) => item.fresh);
+    if (preferred > 0) due.unshift(...due.splice(preferred, 1));
+    return due.slice(0, 2).map(({ candidate }) => {
+      if (!visible.has(candidate.id)) scan.candidates.push(candidate);
+      return candidate;
+    });
   }
   async prepare(task: Task, step: Step, run: Run): Promise<Prepared> {
     if (run.config.realAction !== 'auto' || task.mode !== 'real' || run.mode !== 'real')

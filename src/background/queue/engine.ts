@@ -23,7 +23,7 @@ import {
 import { assertPrepared, filterThread, validEvidence } from '../../domain/policies';
 import { configSchema, normalizeForum } from '../../shared/validation';
 import type { PlatformAdapter } from '../../adapters/platform';
-import { PageNotReadyError } from '../../adapters/platform';
+import { BlockedError, PageNotReadyError, ThreadUnavailableError } from '../../adapters/platform';
 
 const terminal = new Set(['completed', 'stopped', 'skipped']);
 const errorText = (e: unknown) => (e instanceof Error ? e.message : '操作失败');
@@ -350,7 +350,14 @@ export class Engine {
     } catch (e) {
       await this.repo.atomic(async (tx) => {
         const r = await tx.objectStore('runs').get(snapshot.id);
-        if (!r) return;
+        if (!r || r.status !== 'running' || r.epoch !== snapshot.epoch) return;
+        if (e instanceof BlockedError) {
+          r.status = 'blocked';
+          r.reason = e.message;
+          r.epoch++;
+          await tx.objectStore('runs').put(r);
+          return;
+        }
         r.readFailures++;
         r.reason = `读取失败，已退避：${errorText(e)}`;
         r.nextCheckAt =
@@ -390,7 +397,7 @@ export class Engine {
         r.epoch++;
       }
       const baseline = !r.baseline;
-      for (const c of result.candidates.slice(0, r.forumTabId === undefined ? 100 : 102)) {
+      for (const c of result.candidates.slice(0, r.forumTabId === undefined ? 100 : 200)) {
         const key = `${r.mode}:${r.config.forum}:${c.id}`;
         const prior = await tx.objectStore('threads').get(key);
         const recheck =
@@ -401,6 +408,11 @@ export class Engine {
         }
         if (!prior) r.discovered++;
         let decision = baseline ? '启动前基线，仅展示' : filterThread(c, r.config);
+        if (!decision && r.forumTabId !== undefined && c.timeEvidence !== 'verified') {
+          if (c.creationCheck?.kind === 'old') decision = '列表创建时间早于启动，跳过旧帖';
+          if (c.creationCheck?.kind === 'removed') decision = '贴吧已确认该帖不存在，跳过';
+          if (c.creationCheck?.kind === 'later') decision = '主题详情暂未就绪，稍后单独核实';
+        }
         if (!decision && (!result.reliable || c.timeEvidence !== 'verified' || !c.publishedAt))
           decision = '发布时间无法可靠核实，仅展示';
         if (!decision && c.publishedAt! <= r.startedAt)
@@ -465,11 +477,17 @@ export class Engine {
         });
       }
       if (!result.blocking) r.baseline = true;
-      await tx.objectStore('runs').put(r);
       // Bounded observed-thread cache. Task dedupe persists separately forever.
       const all = await tx.objectStore('threads').index('mode').getAll(r.mode);
+      if (r.forumTabId !== undefined)
+        r.pendingTimeCount = all.filter(
+          (t) => t.runId === r.id && t.timeCheckPending && !t.taskId && !t.skipped,
+        ).length;
+      await tx.objectStore('runs').put(r);
       if (all.length > 10000) {
-        const old = all.filter((t) => !t.taskId).sort((a, b) => a.firstSeen - b.firstSeen);
+        const old = all
+          .filter((t) => !t.taskId && !(t.runId === r.id && t.timeCheckPending))
+          .sort((a, b) => a.firstSeen - b.firstSeen);
         for (const t of old.slice(0, all.length - 10000))
           await tx.objectStore('threads').delete(t.key);
       }
@@ -539,7 +557,7 @@ export class Engine {
       prepared = await adapter.prepare(task, step, run);
       assertPrepared(task, step.stage, prepared);
     } catch (e) {
-      await this.preparationFailed(run, task, step, errorText(e), e instanceof PageNotReadyError);
+      await this.preparationFailed(run, task, step, e);
       return;
     }
     const attempt: Attempt = {
@@ -663,13 +681,8 @@ export class Engine {
     }
     await this.settle(attempt, result);
   }
-  private async preparationFailed(
-    run: Run,
-    task: Task,
-    step: Step,
-    reason: string,
-    retryable = false,
-  ) {
+  private async preparationFailed(run: Run, task: Task, step: Step, error: unknown) {
+    const reason = errorText(error);
     const deferred = await this.repo.atomic(async (tx) => {
       const r = await tx.objectStore('runs').get(run.id);
       const t = await tx.objectStore('tasks').get(task.id);
@@ -685,7 +698,35 @@ export class Engine {
       }
       // Preparation can open an editor but cannot enter text, create an intent or submit.
       // Retrying page preparation is never permission to retry a submission.
-      if (retryable && run.mode === 'real' && !s.attemptId && (s.preparationRetries ?? 0) < 2) {
+      if (
+        error instanceof ThreadUnavailableError &&
+        r.forumTabId !== undefined &&
+        !s.attemptId &&
+        s.stage === 'root'
+      ) {
+        s.status = 'skipped';
+        s.reason = reason;
+        s.endedAt = this.now();
+        t.status = 'skipped';
+        t.reason = reason;
+        t.updatedAt = this.now();
+        const key = `real:${r.config.forum}:${task.thread.id}`;
+        const thread = await tx.objectStore('threads').get(key);
+        if (thread)
+          await tx
+            .objectStore('threads')
+            .put({ ...thread, skipped: true, decision: '发表评论前主题已删除，跳过' });
+        r.skippedBeforeSend = (r.skippedBeforeSend ?? 0) + 1;
+        await tx.objectStore('tasks').put(t);
+        await tx.objectStore('runs').put(r);
+        return false;
+      }
+      if (
+        error instanceof PageNotReadyError &&
+        run.mode === 'real' &&
+        !s.attemptId &&
+        (s.preparationRetries ?? 0) < 2
+      ) {
         s.preparationRetries = (s.preparationRetries ?? 0) + 1;
         s.status = 'waiting';
         s.reason = `${reason}。稍后自动重新准备（${s.preparationRetries}/2），尚未发送`;

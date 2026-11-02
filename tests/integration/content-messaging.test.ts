@@ -50,6 +50,11 @@ function harness(scheme = 'safari-web-extension') {
   });
   new Script(code).runInContext(dom.getInternalVMContext());
   return {
+    showDeleted: () => {
+      dom.reconfigure({ url: 'https://tieba.baidu.com/p/900' });
+      dom.window.document.title = '贴吧404';
+      dom.window.document.body.innerHTML = '<h1>很抱歉，该贴已被删除</h1>';
+    },
     pagehide: () => dom.window.dispatchEvent(new dom.window.Event('pagehide')),
     pageshow: () => dom.window.dispatchEvent(new dom.window.Event('pageshow')),
     dispatch: () =>
@@ -58,7 +63,10 @@ function harness(scheme = 'safari-web-extension') {
         { id: 'local.test', url: `${scheme}://TEST-ORIGIN/background.js` },
         () => {},
       ),
-    async send(raw = request, url = `${scheme}://TEST-ORIGIN/background.js`) {
+    async send(
+      raw: typeof request & { expectedThread?: string; previousDocument?: string } = request,
+      url = `${scheme}://TEST-ORIGIN/background.js`,
+    ) {
       return new Promise<any>((resolve) => {
         const result = listener(raw, { id: 'local.test', url }, resolve);
         if (typeof result === 'object' && typeof result.then === 'function') result.then(resolve);
@@ -134,6 +142,26 @@ it('离开页面后旧文档不再响应，恢复显示后才重新提供只读�
     expect(h.dispatch()).toBe(false);
     h.pageshow();
     expect((await h.send()).ok).toBe(true);
+  } finally {
+    h.close();
+  }
+});
+
+it('旧删帖文档只能确认自己的帖号，导航途中收到旧页响应不可据此跳过新帖', async () => {
+  const h = harness('chrome-extension');
+  try {
+    h.showDeleted();
+    const inspect = { ...request, type: 'HORITIEBA_INSPECT', expectedThread: '900' };
+    expect(await h.send(inspect)).toMatchObject({ ok: false, code: 'thread-unavailable' });
+    expect(await h.send({ ...inspect, expectedThread: '901' })).toMatchObject({
+      ok: false,
+      code: 'page-not-ready',
+    });
+    const context = await h.send({ ...request, type: 'HORITIEBA_PAGE_CONTEXT' });
+    expect(context).toMatchObject({ ok: true, data: { draft: false } });
+    expect(
+      await h.send({ ...inspect, previousDocument: context.data.documentToken }),
+    ).toMatchObject({ ok: false, code: 'page-not-ready' });
   } finally {
     h.close();
   }

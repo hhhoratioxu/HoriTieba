@@ -11,7 +11,7 @@ import {
 import { safePageUrl } from '../adapters/tieba/legacy';
 import type { Repository } from '../storage/database';
 import { sameTarget } from '../domain/policies';
-import { PageNotReadyError } from '../adapters/platform';
+import { PageNotReadyError, ThreadUnavailableError, BlockedError } from '../adapters/platform';
 function pageDocumentToken(value: unknown) {
   const parsed = documentTokenSchema.safeParse(value);
   if (!parsed.success)
@@ -21,6 +21,7 @@ function pageDocumentToken(value: unknown) {
 const readStages: Record<string, string> = {
   HORITIEBA_READ: '读取贴吧列表',
   HORITIEBA_INSPECT: '读取主题与账号',
+  HORITIEBA_PAGE_CONTEXT: '确认工作页与草稿',
   HORITIEBA_PREPARE: '准备用于发表的编辑器',
   HORITIEBA_EXPAND: '展开楼层核实评论',
 };
@@ -63,6 +64,9 @@ export class WorkTabs {
       ]);
       if (response?.requestId !== requestId) throw Error('工作页面响应标识不一致');
       if (!response.ok) {
+        if (response.code === 'thread-unavailable')
+          throw new ThreadUnavailableError(response.error);
+        if (response.code === 'page-blocked') throw new BlockedError(response.error);
         if (stage && response.code === 'page-not-ready')
           throw new PageNotReadyError(response.error);
         throw Error(response.error ?? '工作页面响应无效');
@@ -123,7 +127,7 @@ export class WorkTabs {
       if (normalizeForum(tab.url) !== forum)
         throw Error('监控标签页的贴吧已改变，请关闭该工作标签页后继续');
       const before = await this.read(id);
-      if (before.draft) throw Error('监控标签页存在草稿，已停止刷新以保护输入');
+      if (before.draft) throw new BlockedError('监控标签页存在草稿，已停止刷新以保护输入');
       if (before.scan.blocking?.includes('安全验证')) return before.scan;
       const params = new URL(tab.url).searchParams;
       const filtered =
@@ -178,8 +182,17 @@ export class WorkTabs {
       `工作页面未就绪${created ? '（已创建一个监控标签页）' : ''}：${last instanceof Error ? last.message : '读取失败'}`,
     );
   }
-  private async inspect(id: number, timeout = 8000) {
-    const response = await this.send(id, { type: 'HORITIEBA_INSPECT' }, timeout);
+  private async inspect(
+    id: number,
+    timeout = 8000,
+    expectedThread?: string,
+    previousDocument?: string,
+  ) {
+    const response = await this.send(
+      id,
+      { type: 'HORITIEBA_INSPECT', expectedThread, previousDocument },
+      timeout,
+    );
     if (typeof response?.draft !== 'boolean') throw Error('工作页草稿状态缺失');
     return {
       draft: response.draft as boolean,
@@ -187,7 +200,7 @@ export class WorkTabs {
       documentToken: pageDocumentToken(response.documentToken),
     };
   }
-  private async waitThread(id: number, previousDocument?: string) {
+  private async waitThread(id: number, previousDocument?: string, expectedThread?: string) {
     let last: unknown;
     let switched = false;
     // document_idle can arrive well after the visible thread body on the live site.
@@ -198,7 +211,12 @@ export class WorkTabs {
       try {
         const remaining = deadline - Date.now();
         if (remaining <= 0) break;
-        const value = await this.inspect(id, Math.min(8000, remaining));
+        const value = await this.inspect(
+          id,
+          Math.min(8000, remaining),
+          expectedThread,
+          previousDocument,
+        );
         if (value.documentToken === previousDocument) {
           last = Error('主题页导航尚未完成，仍是旧页面');
           continue;
@@ -210,6 +228,12 @@ export class WorkTabs {
         return { id, ...value };
       } catch (e) {
         last = e;
+        if (
+          e instanceof ThreadUnavailableError ||
+          e instanceof BlockedError ||
+          (e instanceof Error && /No tab with id|Invalid tab ID/i.test(e.message))
+        )
+          throw e;
         if (!switched && e instanceof Error && /主题旧版页面未就绪/.test(e.message)) {
           await this.legacy(id);
           switched = true;
@@ -232,36 +256,52 @@ export class WorkTabs {
     await chrome.tabs.reload(id);
     return this.waitThread(id, current.documentToken);
   }
-  async thread(url: string) {
+  async thread(url: string, recoverClosed = false): ReturnType<WorkTabs['waitThread']> {
     const tid = new URL(url).pathname.split('/').pop()!;
     const safe = safePageUrl(url, tid);
     if (!safe) throw Error('执行页主题链接无效');
-    const saved = await chrome.storage.local.get('executionTab');
-    let id = saved.executionTab as number | undefined;
+    const { executionTab } = await chrome.storage.local.get('executionTab');
+    let id = typeof executionTab === 'number' ? executionTab : undefined;
     let previousDocument: string | undefined;
-    if (id !== undefined) {
-      let tab;
-      try {
-        tab = await chrome.tabs.get(id);
-      } catch {
-        await chrome.storage.local.remove('executionTab');
-        throw Error('执行标签页已关闭；请确认后继续');
+    try {
+      if (id !== undefined) {
+        const tab = await chrome.tabs.get(id).catch(() => null);
+        if (!tab) {
+          await chrome.storage.local.remove('executionTab');
+          if (!recoverClosed) throw new PageNotReadyError('执行标签页已关闭');
+          id = undefined;
+        } else if (!tab.url || !safePageUrl(tab.url, new URL(tab.url).pathname.split('/').pop()!)) {
+          throw new BlockedError('执行标签页已离开主题页，请先核对是否需要登录或验证');
+        } else if (safePageUrl(tab.url, tid) !== safe) {
+          const context = await this.send(id, { type: 'HORITIEBA_PAGE_CONTEXT' });
+          if (typeof context?.draft !== 'boolean') throw Error('缺少草稿状态，禁止导航');
+          if (context.draft || context.blocking)
+            throw new BlockedError(context.blocking || '执行标签页有草稿，禁止导航或刷新');
+          previousDocument = pageDocumentToken(context.documentToken);
+          await chrome.tabs.update(id, { url: safe });
+        }
       }
-      if (!tab.url || !safePageUrl(tab.url, new URL(tab.url).pathname.split('/').pop()!))
-        throw Error('执行标签页已离开主题页');
-      if (safePageUrl(tab.url, tid) !== safe) {
-        const old = await this.inspect(id);
-        if (old.draft) throw Error('执行标签页有草稿，禁止导航或刷新');
-        previousDocument = old.documentToken;
-        await chrome.tabs.update(id, { url: safe });
+      if (id === undefined) {
+        const tab = await chrome.tabs.create({ url: safe, active: false });
+        if (tab.id === undefined) throw Error('无法创建执行标签页');
+        id = tab.id;
+        await chrome.storage.local.set({ executionTab: id });
       }
-    } else {
-      const tab = await chrome.tabs.create({ url: safe, active: false });
-      if (tab.id === undefined) throw Error('无法创建执行标签页');
-      id = tab.id;
-      await chrome.storage.local.set({ executionTab: id });
+      return await this.waitThread(id, previousDocument, tid);
+    } catch (error) {
+      // Repair a closure during navigation/wait once, and only before a send intent exists.
+      if (
+        recoverClosed &&
+        id !== undefined &&
+        !(error instanceof BlockedError) &&
+        !(await chrome.tabs.get(id).catch(() => null))
+      ) {
+        if ((await chrome.storage.local.get('executionTab')).executionTab === id)
+          await chrome.storage.local.remove('executionTab');
+        return this.thread(safe, false);
+      }
+      throw error;
     }
-    return this.waitThread(id, previousDocument);
   }
   async prepare(target: Target, run: Run, step: Step) {
     const generation = this.generation;
@@ -269,9 +309,12 @@ export class WorkTabs {
       if (generation !== this.generation) throw Error('准备已取消');
     };
     this.ticket = undefined;
-    let view = await this.thread(target.pageUrl ?? `https://tieba.baidu.com/p/${target.threadId}`);
+    let view = await this.thread(
+      target.pageUrl ?? `https://tieba.baidu.com/p/${target.threadId}`,
+      run.forumTabId !== undefined,
+    );
     if (target.relation === 'root' && view.page.lastPage)
-      view = await this.thread(view.page.lastPage);
+      view = await this.thread(view.page.lastPage, run.forumTabId !== undefined);
     ensureCurrent();
     if (view.draft) throw Error('执行标签页存在草稿，禁止覆盖');
     if (target.relation === 'self-root' && step.preparationRetries) {

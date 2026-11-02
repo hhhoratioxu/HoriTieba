@@ -13,7 +13,7 @@
 
 可以同时保留一个列表页和一个帖子页。同一个账号的发送至少间隔 30 秒。点 **停止** 或关闭对应页面，就会结束那一项。
 
-**[下载 Chrome 扩展](https://github.com/hhhoratioxu/HoriTieba/releases/latest/download/HoriTieba-extension.zip)** · [v0.4.0 发行页](https://github.com/hhhoratioxu/HoriTieba/releases/tag/v0.4.0)
+**[下载 Chrome 扩展](https://github.com/hhhoratioxu/HoriTieba/releases/latest/download/HoriTieba-extension.zip)** · [v0.4.1 发行页](https://github.com/hhhoratioxu/HoriTieba/releases/tag/v0.4.1)
 
 ## 安装
 

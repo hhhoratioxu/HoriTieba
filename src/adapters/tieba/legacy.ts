@@ -1,3 +1,4 @@
+import { BlockedError, ThreadUnavailableError } from '../platform';
 import type { Candidate, Evidence, Attempt, Scan, Account } from '../../domain/models';
 import { detectSession, profileId, detectBlockingState, detectCurrentForum } from './read-page';
 import { threadId, normalizeForum } from '../../shared/validation';
@@ -151,7 +152,16 @@ export function legacyThread(doc: Document, url: string): ThreadObservation {
   const tid = threadId(url);
   if (!tid) throw Error('主题链接无效');
   const blocked = detectBlockingState(doc);
-  if (blocked) throw Error(blocked);
+  if (blocked) throw new BlockedError(blocked);
+  if (
+    !doc.querySelector('#j_p_postlist') &&
+    /^(?:百度)?贴吧\s*404$/.test(doc.title.trim()) &&
+    Array.from(doc.querySelectorAll('h1,h2')).some((h) =>
+      /(?:该[贴帖]|该主题)(?:子)?已被删除|该[贴帖]子?不存在/.test(h.textContent ?? ''),
+    )
+  ) {
+    throw new ThreadUnavailableError('贴吧已确认该帖被删除或不存在');
+  }
   if (!doc.querySelector('#j_p_postlist')) throw Error('主题旧版页面未就绪');
   const forumHref = doc.querySelector('#tab_forumname')?.getAttribute('href');
   if (!forumHref) throw Error('缺少主题所属贴吧');

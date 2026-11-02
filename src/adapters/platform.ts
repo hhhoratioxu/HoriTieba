@@ -24,3 +24,7 @@ export class BlockedError extends Error {
 export class PageNotReadyError extends Error {
   name = 'PageNotReadyError';
 }
+
+export class ThreadUnavailableError extends Error {
+  name = 'ThreadUnavailableError';
+}

@@ -23,7 +23,15 @@ export const pageRequestSchema = z.discriminatedUnion('type', [
   z.object({ ...base, type: z.literal('HORITIEBA_FORUM_CHANGED') }).strict(),
   z.object({ ...base, type: z.literal('HORITIEBA_READ') }).strict(),
   z.object({ ...base, type: z.literal('HORITIEBA_LEGACY') }).strict(),
-  z.object({ ...base, type: z.literal('HORITIEBA_INSPECT') }).strict(),
+  z
+    .object({
+      ...base,
+      type: z.literal('HORITIEBA_INSPECT'),
+      expectedThread: decimalId.optional(),
+      previousDocument: documentTokenSchema.optional(),
+    })
+    .strict(),
+  z.object({ ...base, type: z.literal('HORITIEBA_PAGE_CONTEXT') }).strict(),
   z
     .object({
       ...base,

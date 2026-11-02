@@ -56,7 +56,7 @@ if (!(await sameFiles('dist', extension))) {
 await import('./build-safari.mjs');
 await writeFile(
   path.join(release, 'README-安装与使用.md'),
-  '# HoriTieba · 贴吧追评助手 0.4.0\n\n列表页自动评论新帖，帖子页自动回复评论和楼中楼。输入文字，点「开始」。\n\n' +
+  '# HoriTieba · 贴吧追评助手 0.4.1\n\n列表页自动评论新帖，帖子页自动回复评论和楼中楼。输入文字，点「开始」。\n\n' +
     releaseLinks(await readFile('docs/installation.md', 'utf8')) +
     '\n\n---\n\n' +
     releaseLinks(await readFile('docs/user-guide.md', 'utf8')),

@@ -107,8 +107,8 @@ const report = `# 测试报告
 ## 自动化结果
 
 - Vitest：${unit.numPassedTests} 项通过，${unit.numFailedTests} 项失败，包含单元、集成、DOM fixture 和性能测量。
-- 0.4.0 贴吧列表自动评论隔离浏览器通过 ${forum.results.length} 组。本机 HTTPS 测试站接收 ${forum.fixtureSubmissions} 条模拟一级评论，外部发布 0 条。
-- 0.4.0 本帖回复隔离浏览器通过 ${single.results.length} 组，包括同作者两条楼中楼、两种分页、后来新增的评论、关闭停止与发送未知保护。未使用真实账号发布该模式的回复。
+- 0.4.1 贴吧列表自动评论隔离浏览器通过 ${forum.results.length} 组。本机 HTTPS 测试站接收 ${forum.fixtureSubmissions} 条模拟一级评论，外部发布 0 条。
+- 0.4.1 本帖回复隔离浏览器通过 ${single.results.length} 组，包括同作者两条楼中楼、两种分页、后来新增的评论、关闭停止与发送未知保护。未使用真实账号发布该模式的回复。
 - TypeScript 检查及 Vite/esbuild 扩展构建：通过。
 - 扩展界面、演示队列与恢复：${e2e.results.length} 组通过，未捕获页面脚本异常。
 - 真实适配器全链路本地 fixture：${real.results.length} 组通过；不访问实际账号、不对外发布。
@@ -136,7 +136,7 @@ ${rows.map(([a, b]) => '| ' + a + ' | ' + b + ' |').join('\n')}
 
 ## 实机验证
 
-0.4.0 的列表与帖子流程在隔离浏览器验证；品牌 Chrome 的实际检查单独记录。0.3.0 的帖子页输入栏此前在品牌 Chrome 核对过。历史 0.2.2 高级控制台的五条评论已通过 Chrome 真实账号验收。[真实接入验证](verification.md) · [Chrome](chrome.md) · [Safari](safari.md)
+0.4.1 的列表与帖子流程在隔离浏览器验证；品牌 Chrome 的实际检查单独记录。0.3.0 的帖子页输入栏此前在品牌 Chrome 核对过。历史 0.2.2 高级控制台的五条评论已通过 Chrome 真实账号验收。[真实接入验证](verification.md) · [Chrome](chrome.md) · [Safari](safari.md)
 
 ## 性能测量
 

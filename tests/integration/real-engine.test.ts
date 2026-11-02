@@ -371,3 +371,28 @@ it('准备期间暂停优先于自动等待恢复，不自行恢复运行', asyn
   expect(await h.run()).toMatchObject({ status: 'paused', sendCount: 0 });
   expect(submit).not.toHaveBeenCalled();
 });
+
+it('列表任务入队后若主题在准备前删除，只略过该任务，不能登记发送或阻断其他新帖', async () => {
+  const h = await setup();
+  const r = await h.engine.start('real', undefined, {
+    tabId: 12,
+    forum: '测试',
+    text: '合成文本',
+    account: { id: 'tb.fixture.own', confirmed: true, label: 'fixture' },
+  });
+  await h.engine.tick('real');
+  h.advance(65000);
+  h.set([h.candidate('701', h.clock() - 2000), h.candidate('702', h.clock() - 1000)]);
+  const { ThreadUnavailableError } = await import('../../src/adapters/platform');
+  vi.spyOn(h.realAdapter, 'prepare').mockRejectedValue(new ThreadUnavailableError('该帖已被删除'));
+  await h.engine.tick('real');
+  expect(await h.run()).toMatchObject({
+    id: r.id,
+    status: 'running',
+    sendCount: 0,
+    skippedBeforeSend: 1,
+    taskCount: 2,
+  });
+  expect((await h.tasks()).map((t) => t.status).sort()).toEqual(['queued', 'skipped']);
+  expect(await h.attempts()).toHaveLength(0);
+});

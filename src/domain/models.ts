@@ -80,6 +80,9 @@ export interface Candidate {
   publishedAt?: number;
   timePrecisionMs?: number;
   timeCheckPending?: boolean;
+  /** Background-only discovery outcome, never accepted as positive posting evidence. */
+  creationCheck?: { kind: 'old' | 'removed' } | { kind: 'later'; attempts: number; after: number };
+  labelObservedAt?: number;
   timeLabel?: string;
   timeEvidence: 'verified' | 'relative' | 'unavailable';
   kind: 'thread' | 'pinned' | 'recommended' | 'ad';
@@ -185,6 +188,8 @@ export interface Run {
   epoch: number;
   checks: number;
   readFailures: number;
+  pendingTimeCount?: number;
+  skippedBeforeSend?: number;
   reason?: string;
   coverage: string;
   sendCount: number;

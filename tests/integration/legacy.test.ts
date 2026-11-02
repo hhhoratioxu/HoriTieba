@@ -383,3 +383,21 @@ it('主线程长时间阻塞导致许可过期时，即使计时器尚未执行�
   ).rejects.toThrow('许可已过期');
   expect(click).not.toHaveBeenCalled();
 });
+
+it('仅在带贴吧 404 标题和删除提示的独立页面确认删帖，验证或普通主题不误判', () => {
+  const dom = (markup: string) => new DOMParser().parseFromString(markup, 'text/html');
+  const heading = '<h1>很抱歉，该贴已被删除 返回首页</h1>';
+  expect(() => legacyThread(dom('<title>贴吧404</title>' + heading), url)).toThrowError(
+    expect.objectContaining({ name: 'ThreadUnavailableError' }),
+  );
+  expect(() => legacyThread(dom('<title>贴吧404</title><h1>正在加载</h1>'), url)).toThrow(
+    '主题旧版页面未就绪',
+  );
+  expect(() => legacyThread(dom('<title>百度安全验证</title>' + heading), url)).toThrowError(
+    expect.objectContaining({ name: 'BlockedError' }),
+  );
+  const post = d();
+  post.title = '贴吧404';
+  post.body.insertAdjacentHTML('afterbegin', heading);
+  expect(legacyThread(post, url).threadId).toBe('900');
+});

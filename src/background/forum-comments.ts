@@ -24,13 +24,17 @@ function view(r: Run | undefined, tab: number, forum: string): ForumState | null
     terminal = r.status === 'stopped' || r.status === 'completed';
   if (!own && terminal && !r.unknownCount) return null;
   const elsewhere = !own && !terminal;
+  const pending =
+    r.status === 'running' && r.pendingTimeCount ? `有 ${r.pendingTimeCount} 篇待核实创建时间` : '';
+  const queued = r.taskCount - r.rootSuccess - (r.skippedBeforeSend ?? 0);
+  const progress = r.status === 'running' && queued > 0 ? `待评论 ${queued} 帖` : pending;
   return {
     id: r.id,
     status: elsewhere ? 'elsewhere' : r.status,
     sent: r.rootSuccess,
     unknown: r.unknownCount > 0,
     text: elsewhere ? '' : (r.libraries.find((l) => l.stage === 'root')?.items[0]?.text ?? ''),
-    reason: elsewhere ? '已在另一个标签页运行' : (r.reason ?? ''),
+    reason: elsewhere ? '已在另一个标签页运行' : r.reason || progress,
   };
 }
 export class ForumComments {
