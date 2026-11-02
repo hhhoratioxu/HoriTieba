@@ -18,6 +18,9 @@ export const targetSchema = z
   .strict();
 const base = { requestId: z.string().uuid(), context: z.literal('background') };
 export const pageRequestSchema = z.discriminatedUnion('type', [
+  z.object({ ...base, type: z.literal('HORITIEBA_FOCUS') }).strict(),
+  z.object({ ...base, type: z.literal('HORITIEBA_LOCATION_CHANGED') }).strict(),
+  z.object({ ...base, type: z.literal('HORITIEBA_FORUM_CHANGED') }).strict(),
   z.object({ ...base, type: z.literal('HORITIEBA_READ') }).strict(),
   z.object({ ...base, type: z.literal('HORITIEBA_LEGACY') }).strict(),
   z.object({ ...base, type: z.literal('HORITIEBA_INSPECT') }).strict(),

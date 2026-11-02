@@ -8,14 +8,17 @@ function releaseLinks(markdown) {
     .replaceAll('](chrome.md)', '](CHROME-安装与验收.md)')
     .replaceAll('](safari.md)', '](SAFARI-安装与验收.md)')
     .replaceAll('](test-report.md)', '](TEST-REPORT.md)')
-    .replaceAll('](verification.md)', '](REAL-VERIFICATION.md)');
+    .replaceAll('](verification.md)', '](REAL-VERIFICATION.md)')
+    .replaceAll('](user-guide.md)', '](README-安装与使用.md)');
 }
 await mkdir(release, { recursive: true });
 await readFile('dist/manifest.json');
+const forum = JSON.parse(await readFile('artifacts/forum-e2e.json', 'utf8'));
 const e2e = JSON.parse(await readFile('artifacts/e2e-results.json', 'utf8'));
 const single = JSON.parse(await readFile('artifacts/thread-reply-e2e.json', 'utf8'));
 const real = JSON.parse(await readFile('artifacts/real-e2e-results.json', 'utf8'));
 if (
+  !forum.passed ||
   !single.passed ||
   e2e.error ||
   real.error ||
@@ -53,7 +56,7 @@ if (!(await sameFiles('dist', extension))) {
 await import('./build-safari.mjs');
 await writeFile(
   path.join(release, 'README-安装与使用.md'),
-  '# HoriTieba · 贴吧追评助手 0.3.0\n\n打开一篇贴吧帖子，在页面底部输入你想回复的内容，点「开始」。助手会逐条回复楼层和楼中楼。点「停止」或关闭这篇帖子即可结束。\n\n' +
+  '# HoriTieba · 贴吧追评助手 0.4.0\n\n列表页自动评论新帖，帖子页自动回复评论和楼中楼。输入文字，点「开始」。\n\n' +
     releaseLinks(await readFile('docs/installation.md', 'utf8')) +
     '\n\n---\n\n' +
     releaseLinks(await readFile('docs/user-guide.md', 'utf8')),

@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
   "name": "HoriTieba · 贴吧追评助手",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "minimum_chrome_version": "120",
-  "description": "在贴吧帖子底部输入一次内容，自动逐条回复本帖的楼层和楼中楼。支持跳过自己、按评论去重和随时停止。",
-  "permissions": ["storage", "alarms", "sidePanel"],
+  "description": "在贴吧列表页自动给每篇新帖评论一次，在帖子页自动回复评论和楼中楼。输入文字，点开始。",
+  "permissions": ["storage", "alarms"],
   "host_permissions": ["https://tieba.baidu.com/*"],
   "background": {
     "service_worker": "background.js",
@@ -14,10 +14,6 @@
     "default_title": "HoriTieba",
     "default_popup": "popup.html"
   },
-  "side_panel": {
-    "default_path": "sidepanel.html"
-  },
-  "options_page": "dashboard.html",
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",

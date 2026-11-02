@@ -1,3 +1,4 @@
+import { reserveSlot, releaseSlot } from '../send-slot';
 import { threadRunKey, type ThreadReplyRun } from '../../shared/thread-reply';
 import { Repository, type Transaction } from '../../storage/database';
 import {
@@ -6,6 +7,10 @@ import {
   stageNames,
   enabledStages,
   cursorId,
+  defaultConfig,
+  type Account,
+  type Library,
+  type Scan,
   type Mode,
   type Run,
   type Task,
@@ -49,11 +54,33 @@ export class Engine {
   async start(
     mode: Mode,
     expected?: { configVersion: number; libraryVersions: number[]; accountId?: string },
+    page?: { tabId: number; forum: string; text: string; account: Account },
   ) {
     if (this.fault) throw Error(this.fault);
-    const config = configSchema.parse(await this.repo.db.get('configs', mode));
+    if (page && mode !== 'real') throw Error('贴吧页面只能启动真实模式。');
+    const instance = uid();
+    const config = page
+      ? {
+          ...defaultConfig('real'),
+          forum: page.forum,
+          realAction: 'auto' as const,
+          selfReply: false,
+          maxReplies: 0,
+          checkSeconds: 30,
+        }
+      : configSchema.parse(await this.repo.db.get('configs', mode));
     config.forum = normalizeForum(config.forum);
-    const libraries = await this.repo.libraries(mode);
+    const libraries: Library[] = page
+      ? stages.map((stage) => ({
+          id: 'forum:' + instance + ':' + stage,
+          mode,
+          stage,
+          version: 1,
+          enabled: stage === 'root',
+          loop: stage === 'root',
+          items: stage === 'root' ? [{ id: instance, text: page.text }] : [],
+        }))
+      : await this.repo.libraries(mode);
     if (
       expected &&
       (expected.configVersion !== config.version ||
@@ -61,11 +88,11 @@ export class Engine {
     )
       throw Error('启动摘要已过期：配置或内容库已变更，请重新确认');
     const adapter = this.adapters[mode];
-    const account = await adapter.detectSession(config);
+    const account = page?.account ?? (await adapter.detectSession(config));
     const canSend = this.sends(mode, config);
     if (canSend) {
       if (!account.confirmed || !account.id) throw Error('身份未确认');
-      if (mode === 'real' && expected?.accountId !== account.id)
+      if (mode === 'real' && !page && expected?.accountId !== account.id)
         throw Error('启动摘要账号缺失或已改变，请重新核对');
       for (const s of enabledStages(config, libraries)) {
         if (!libraries.find((l) => l.stage === s)?.items.length)
@@ -74,7 +101,8 @@ export class Engine {
     }
     const now = this.now();
     const run: Run = {
-      id: uid(),
+      id: instance,
+      ...(page ? { forumTabId: page.tabId } : {}),
       mode,
       status: 'running',
       config,
@@ -101,13 +129,15 @@ export class Engine {
       scenario: 'success',
     };
     await this.repo.atomic(async (tx) => {
-      const storedConfig = await tx.objectStore('configs').get(mode);
-      if (storedConfig?.version !== config.version) throw Error('启动期间配置已变更，请重新确认');
-      for (const lib of libraries) {
-        if ((await tx.objectStore('libraries').get(lib.id))?.version !== lib.version)
-          throw Error('启动期间内容库已变更，请重新确认');
+      if (!page) {
+        const storedConfig = await tx.objectStore('configs').get(mode);
+        if (storedConfig?.version !== config.version) throw Error('启动期间配置已变更，请重新确认');
+        for (const lib of libraries) {
+          if ((await tx.objectStore('libraries').get(lib.id))?.version !== lib.version)
+            throw Error('启动期间内容库已变更，请重新确认');
+        }
       }
-      if (canSend && mode === 'real') {
+      if (!page && canSend && mode === 'real') {
         const simple = (await tx.objectStore('meta').get(threadRunKey))?.value as
           ThreadReplyRun | undefined;
         if (simple?.running) throw Error('请先在帖子底部停止本帖自动回复。');
@@ -137,14 +167,23 @@ export class Engine {
     );
     return run;
   }
-  async control(mode: Mode, action: 'pause' | 'resume' | 'stop' | 'emergency') {
-    if (action !== 'resume') {
+  async control(
+    mode: Mode,
+    action: 'pause' | 'resume' | 'stop' | 'emergency',
+    expectedRunId?: string,
+  ) {
+    if (action !== 'resume' && !expectedRunId) {
       this.cancellationVersion[mode]++;
       this.adapters[mode].cancel();
     }
     await this.repo.atomic(async (tx) => {
       const run = await this.currentTx(tx, mode);
       if (!run) throw Error('尚未启动');
+      if (expectedRunId && run.id !== expectedRunId) throw Error('任务已切换，请重新查看。');
+      if (expectedRunId && action !== 'resume' && !['stopped', 'completed'].includes(run.status)) {
+        this.cancellationVersion[mode]++;
+        this.adapters[mode].cancel();
+      }
       const tasks = await tx.objectStore('tasks').index('runId').getAll(run.id);
       if (action === 'resume') {
         if (!['paused', 'blocked'].includes(run.status)) throw Error('当前状态不能继续');
@@ -293,7 +332,7 @@ export class Engine {
       }
     });
   }
-  async scan(snapshot: Run) {
+  async scan(snapshot: Run, initial?: Scan) {
     const now = this.now();
     const allowed = await this.repo.atomic(async (tx) => {
       const r = await this.currentTx(tx, snapshot.mode);
@@ -307,7 +346,7 @@ export class Engine {
     if (!allowed) return;
     let result;
     try {
-      result = await this.adapters[snapshot.mode].readThreadCandidates(snapshot);
+      result = initial ?? (await this.adapters[snapshot.mode].readThreadCandidates(snapshot));
     } catch (e) {
       await this.repo.atomic(async (tx) => {
         const r = await tx.objectStore('runs').get(snapshot.id);
@@ -351,7 +390,7 @@ export class Engine {
         r.epoch++;
       }
       const baseline = !r.baseline;
-      for (const c of result.candidates.slice(0, 100)) {
+      for (const c of result.candidates.slice(0, r.forumTabId === undefined ? 100 : 102)) {
         const key = `${r.mode}:${r.config.forum}:${c.id}`;
         const prior = await tx.objectStore('threads').get(key);
         const recheck =
@@ -377,7 +416,8 @@ export class Engine {
         const dedupeKey = `${r.mode}:${r.account.id}:${c.id}`;
         if (!decision && (await tx.objectStore('dedupe').get(dedupeKey)))
           decision = '该账号已处理，跨批次去重';
-        if (!decision && r.taskCount >= r.config.maxPosts) decision = '已达本次帖子上限';
+        if (!decision && r.forumTabId === undefined && r.taskCount >= r.config.maxPosts)
+          decision = '已达本次帖子上限';
         let taskId: string | undefined;
         if (!decision) {
           r.matched++;
@@ -442,7 +482,7 @@ export class Engine {
       .sort((a, b) => a.createdAt - b.createdAt);
     const task = tasks[0];
     if (!task) {
-      if (run.taskCount >= run.config.maxPosts)
+      if (run.forumTabId === undefined && run.taskCount >= run.config.maxPosts)
         await this.finishRun(run.id, '已达到本次帖子上限，流程结束');
       return;
     }
@@ -461,7 +501,7 @@ export class Engine {
       );
       return;
     }
-    if (run.sendCount >= run.config.maxSends) {
+    if (run.forumTabId === undefined && run.sendCount >= run.config.maxSends) {
       await this.finishRun(run.id, '达到本次评论总量上限（包含首评、追评与未知尝试）');
       return;
     }
@@ -521,11 +561,26 @@ export class Engine {
       const t = await tx.objectStore('tasks').get(task.id);
       if (!r || !t) return false;
       const s = t.steps.find((s) => s.id === step.id)!;
-      if (r.status !== 'running' || r.epoch !== run.epoch || r.sendCount >= r.config.maxSends) {
+      if (
+        r.status !== 'running' ||
+        r.epoch !== run.epoch ||
+        (r.forumTabId === undefined && r.sendCount >= r.config.maxSends)
+      ) {
         s.status = r.status === 'stopped' ? 'stopped' : 'paused';
         t.status = s.status;
         await tx.objectStore('tasks').put(t);
         return false;
+      }
+      if (r.forumTabId !== undefined) {
+        const due = await reserveSlot(tx, attempt.accountId, attempt.id, this.now());
+        if (due) {
+          r.nextSendAt = Math.max(r.nextSendAt, Math.min(due, this.now() + 30000));
+          s.status = 'waiting';
+          t.status = 'waiting';
+          await tx.objectStore('runs').put(r);
+          await tx.objectStore('tasks').put(t);
+          return false;
+        }
       }
       s.attemptId = attempt.id;
       await tx.objectStore('attempts').add(attempt);
@@ -543,6 +598,7 @@ export class Engine {
       if (r.status !== 'running' || r.epoch !== run.epoch) {
         a.status = 'failed';
         a.reason = '取消发生在提交前，未发送';
+        if (r.forumTabId !== undefined) await releaseSlot(tx, a.accountId, a.id);
         s.status = r.status === 'stopped' ? 'stopped' : 'paused';
         t.status = s.status;
         await tx.objectStore('attempts').put(a);
@@ -570,6 +626,7 @@ export class Engine {
         if (!r || !t || !a) throw Error('取消时发送记录不完整');
         a.status = 'failed';
         a.reason = '发送许可后收到停止信号，实际提交前取消；保守保留占用额度';
+        if (r.forumTabId !== undefined) await releaseSlot(tx, a.accountId, a.id);
         const s = t.steps.find((s) => s.id === step.id)!;
         s.status = r.status === 'stopped' ? 'stopped' : 'paused';
         s.reason = a.reason;
@@ -670,6 +727,7 @@ export class Engine {
       const t = await tx.objectStore('tasks').get(attempt.taskId);
       const r = await tx.objectStore('runs').get(attempt.runId);
       if (!a || !t || !r) throw Error('发送记录不完整，禁止推进游标');
+      if (r.forumTabId !== undefined) await releaseSlot(tx, a.accountId, a.id);
       const s = t.steps.find((s) => s.id === a.stepId)!;
       if (a.status === 'verified' || s.committed) return;
       if (s.attemptId !== a.id) throw Error('旧发送尝试的证据晚于人工重试，不能提交当前步骤游标');

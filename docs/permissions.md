@@ -4,10 +4,9 @@
 | ------------------------------------------- | ---------------------------------------------------------------------- |
 | `storage`                                   | 轻量界面偏好及本扩展创建的监控/执行标签页 ID；核心事务保存在 IndexedDB |
 | `alarms`                                    | 在后台被回收后按事件恢复有边界调度；不用永久定时器人为保活             |
-| `sidePanel`                                 | 轻量侧边栏；失败时可回退完整管理页                                     |
 | `https://tieba.baidu.com/*` host permission | 只在贴吧主域读取经验证 DOM；已启动的自动批次通过普通编辑器发布与核实   |
 
-没有 `<all_urls>`、`cookies`、`history`、`webRequest`、`debugger`、`scripting` 或全局 `tabs` 敏感权限。基础 tabs API 仅创建、定位本扩展自己的工作标签页；已授予的贴吧 host permission 允许识别该域标签页 URL。
+没有 `<all_urls>`、`cookies`、`history`、`webRequest`、`debugger`、`scripting` 或全局 `tabs` 敏感权限。基础 tabs API 用于定位用户启动功能的当前页面、检查关闭或导航，并为新帖评论创建或复用工作标签页；已授予的贴吧 host permission 允许识别该域标签页 URL。
 
 内容脚本只接受同一扩展的后台来源、顶层 frame 和经白名单 schema 校验的读取、官方旧版切换、准备、提交、展开与取消消息。没有 window.postMessage 桥接或 externally_connectable。普通网页不能启动扩展队列。管理消息校验扩展来源、受支持页面、frame、requestId、上下文及 payload；页面响应也经过运行时结构校验。
 

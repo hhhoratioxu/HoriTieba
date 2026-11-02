@@ -50,6 +50,7 @@ export const threadCommand = z.discriminatedUnion('op', [
     .strict(),
   z.object({ ...bound, op: z.literal('stop') }).strict(),
   z.object({ ...bound, op: z.literal('skip') }).strict(),
+  z.object({ ...bound, op: z.literal('turn') }).strict(),
   z.object({ ...bound, op: z.literal('seen'), ids: z.array(decimalId).max(1000) }).strict(),
   z
     .object({

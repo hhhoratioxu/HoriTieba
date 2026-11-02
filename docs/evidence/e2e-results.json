@@ -6,47 +6,47 @@
     {
       "name": "扩展真实加载，无本地服务器，控制台与 CSP 正常",
       "status": "passed",
-      "ms": 57
+      "ms": 106
     },
     {
       "name": "内容库编辑保存；恶意 HTML 仅作为文本显示",
       "status": "passed",
-      "ms": 309
+      "ms": 584
     },
     {
       "name": "启动摘要、初始基线、自动首评及追评 1/3",
       "status": "passed",
-      "ms": 251
+      "ms": 276
     },
     {
       "name": "侧边栏关闭与多个管理页面共享唯一队列",
       "status": "passed",
-      "ms": 274
+      "ms": 420
     },
     {
       "name": "未知结果阻断；扩展浏览器重启后保留证据并先核实",
       "status": "passed",
-      "ms": 3245
+      "ms": 1144
     },
     {
       "name": "暂停/停止保留历史；真实模式不能隐式返回模拟任务",
       "status": "passed",
-      "ms": 147
+      "ms": 173
     },
     {
       "name": "真实模式通过内容脚本读取本地贴吧 fixture，并复用已登记的工作标签页",
       "status": "passed",
-      "ms": 2761
+      "ms": 1304
     },
     {
       "name": "深色主题与日志/历史/设置路由可访问",
       "status": "passed",
-      "ms": 610
+      "ms": 690
     },
     {
       "name": "关闭全部控制台后，真实浏览器 alarm 自动唤醒并完成下一条演示首评",
       "status": "passed",
-      "ms": 34299
+      "ms": 34313
     }
   ],
   "consoleErrors": []

@@ -1,6 +1,6 @@
 {
   "name": "horitieba",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.25.0",
@@ -17,11 +17,12 @@
     "test:e2e:real": "node scripts/e2e-real.mjs",
     "test:performance": "vitest run tests/performance",
     "package": "node scripts/report.mjs && prettier --write docs/test-report.md docs/evidence && node scripts/package.mjs",
-    "check": "pnpm test && pnpm build && pnpm test:e2e && pnpm test:e2e:real && pnpm test:e2e:thread",
+    "check": "pnpm test && pnpm build && pnpm test:e2e && pnpm test:e2e:real && pnpm test:e2e:thread && pnpm test:e2e:forum",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "report": "node scripts/report.mjs",
-    "test:e2e:thread": "node scripts/e2e-thread-replies.mjs"
+    "test:e2e:thread": "node scripts/e2e-thread-replies.mjs",
+    "test:e2e:forum": "node scripts/e2e-forum.mjs"
   },
   "dependencies": {
     "idb": "8.0.4",

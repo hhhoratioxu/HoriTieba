@@ -12,9 +12,9 @@
     "libraries": 5,
     "itemsPerLibrary": 5000
   },
-  "seedMs": 1699.962458,
-  "snapshotMs": 77.94845899999996,
+  "seedMs": 4470.996583,
+  "snapshotMs": 87.34995900000013,
   "snapshotBytes": 11423,
-  "incrementalUpdateMeanMs": 14.043766700000015,
+  "incrementalUpdateMeanMs": 17.379629150000074,
   "note": "Node + fake-indexeddb 数据层测量；不代表真实浏览器帧率、内存泄漏或长期稳定性"
 }

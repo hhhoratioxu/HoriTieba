@@ -1,12 +1,42 @@
 <!doctype html>
 <html lang="zh-CN">
   <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>HoriTieba</title>
+    <style>
+      body {
+        margin: 0;
+        width: 220px;
+        padding: 14px;
+        color: #243044;
+        font:
+          14px/1.5 system-ui,
+          sans-serif;
+      }
+      h1 {
+        margin: 0 0 4px;
+        font-size: 15px;
+      }
+      p {
+        margin: 0;
+        color: #536074;
+      }
+      a {
+        display: inline-block;
+        margin-top: 9px;
+        color: #324eab;
+      }
+      [hidden] {
+        display: none;
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
-    <script type="module" src="/src/pages/main.tsx"></script>
+    <h1>HoriTieba</h1>
+    <p id="hint">在贴吧页面底部输入内容即可使用。</p>
+    <a id="open" href="https://tieba.baidu.com/" target="_blank" rel="noopener">打开贴吧</a>
+    <a id="legacy" href="dashboard.html" target="_blank" rel="noopener" hidden>处理旧版任务</a>
+    <script type="module" src="/src/pages/launcher.ts"></script>
   </body>
 </html>

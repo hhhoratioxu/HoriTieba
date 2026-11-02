@@ -1,3 +1,6 @@
+import { configureToolbar, registerToolbar } from './toolbar';
+import { ForumComments, forumSender } from './forum-comments';
+import { forumCommand } from '../shared/forum-comments';
 import { ThreadReplies, threadSender } from './thread-replies';
 import { threadCommand } from '../shared/thread-reply';
 import { Repository } from '../storage/database';
@@ -21,18 +24,73 @@ const ready = Repository.open().then(async (repo) => {
     repo,
     engine,
     threadReplies: new ThreadReplies(repo),
+    forumComments: new ForumComments(repo, engine, tabs),
     service: new Service(repo, engine, tabs),
   };
 });
+const legacyNeeded = async () => {
+  const { repo } = await ready;
+  const r = await repo.current('real');
+  return (
+    !!r &&
+    r.forumTabId === undefined &&
+    (!['completed', 'stopped'].includes(r.status) || r.unknownCount > 0)
+  );
+};
+registerToolbar(legacyNeeded);
 const broadcast = () => chrome.runtime.sendMessage({ type: 'STATE_CHANGED' }).catch(() => {});
 const pending = new Map<string, Promise<Response>>();
 chrome.runtime.onMessage.addListener((raw, sender, sendResponse) => {
+  if (raw?.type === 'HORITIEBA_LEGACY_STATUS') {
+    if (
+      !trustedUiSender(sender, chrome.runtime.id, chrome.runtime.getURL('')) ||
+      new URL(sender.url!).pathname !== '/popup.html'
+    )
+      return false;
+    return respondToMessage(
+      legacyNeeded()
+        .then((needed) => ({ needed }))
+        .catch(() => ({ needed: false })),
+      sendResponse,
+    );
+  }
+  if (raw?.type === 'HORITIEBA_FORUM') {
+    const parsed = forumCommand.safeParse(raw);
+    if (!parsed.success || !forumSender(sender, parsed.data.forum, chrome.runtime.id)) return false;
+    const result = ready
+      .then(async ({ forumComments, engine, repo }) => {
+        const cmd = parsed.data;
+        const data = await forumComments.handle(cmd, sender.tab!.id!);
+        if (cmd.op !== 'state') {
+          await schedule(repo);
+          if (cmd.op === 'start' && data?.status === 'running')
+            void engine
+              .tick('real')
+              .finally(async () => {
+                await schedule(repo);
+                await forumComments.notify();
+              })
+              .catch(() => {});
+        }
+        return { ok: true, data };
+      })
+      .catch((e) => ({ ok: false, error: e instanceof Error ? e.message : '贴吧操作失败' }));
+    return respondToMessage(result, sendResponse);
+  }
   if (raw?.type === 'HORITIEBA_THREAD_REPLY') {
     const parsed = threadCommand.safeParse(raw);
     if (!parsed.success || !threadSender(sender, parsed.data.thread, chrome.runtime.id))
       return false;
     const result = ready
-      .then(({ threadReplies }) => threadReplies.handle(parsed.data, sender.tab!.id!))
+      .then(async ({ threadReplies }) =>
+        threadReplies.handle(
+          parsed.data,
+          sender.tab!.id!,
+          parsed.data.op === 'start'
+            ? (await chrome.storage.local.get('executionTab')).executionTab
+            : undefined,
+        ),
+      )
       .then(
         (data) => ({ ok: true, data }),
         (e) => ({ ok: false, error: e instanceof Error ? e.message : '本帖操作失败' }),
@@ -88,23 +146,47 @@ chrome.runtime.onMessage.addListener((raw, sender, sendResponse) => {
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === alarmName)
     void ready
-      .then(async ({ engine, repo }) => {
+      .then(async ({ engine, repo, forumComments }) => {
         await engine.tick('demo');
         await engine.tick('real');
         await schedule(repo);
+        await forumComments.notify();
         broadcast();
       })
       .catch(() => broadcast());
 });
+const leavePage = (tab?: number, url?: string) =>
+  ready
+    .then(async ({ forumComments, threadReplies, repo }) => {
+      const [, stopped] = await Promise.all([
+        threadReplies.leave(tab, url),
+        forumComments.leave(tab, url),
+      ]);
+      if (tab === undefined || stopped) await schedule(repo);
+    })
+    .catch(() => {});
 chrome.tabs.onRemoved.addListener((tab) => {
-  void ready.then(({ threadReplies }) => threadReplies.leave(tab));
+  void leavePage(tab);
 });
 chrome.tabs.onUpdated.addListener((tab, change) => {
-  if (change.url) void ready.then(({ threadReplies }) => threadReplies.leave(tab, change.url));
+  if (!change.url) return;
+  void configureToolbar(tab, change.url);
+  void leavePage(tab, change.url);
+  if (change.url.startsWith('https://tieba.baidu.com/'))
+    void chrome.tabs
+      .sendMessage(
+        tab,
+        {
+          type: 'HORITIEBA_LOCATION_CHANGED',
+          context: 'background',
+          requestId: crypto.randomUUID(),
+        },
+        { frameId: 0 },
+      )
+      .catch(() => {});
 });
 chrome.runtime.onStartup.addListener(() => {
-  void ready.then(({ threadReplies }) => threadReplies.leave());
-  void ready.then(({ repo }) => schedule(repo));
+  void leavePage();
 });
 chrome.runtime.onInstalled.addListener(() => {
   void ready.then(async ({ repo }) => {

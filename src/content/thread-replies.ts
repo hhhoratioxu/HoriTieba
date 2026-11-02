@@ -1,3 +1,4 @@
+import { mountActionBar } from './action-bar';
 import {
   assertIdentity,
   floorList,
@@ -18,7 +19,6 @@ import {
   type ThreadReplyRun,
 } from '../shared/thread-reply';
 
-const promptText = '本帖已有和新增评论，含楼中楼。跳过自己，关闭本帖即停止。';
 function wait(ms: number, signal: AbortSignal) {
   signal.throwIfAborted();
   return new Promise<void>((resolve, reject) => {
@@ -33,7 +33,7 @@ function wait(ms: number, signal: AbortSignal) {
     signal.addEventListener('abort', abort, { once: true });
   });
 }
-export function installThreadReplies(documentToken: string) {
+export function installThreadReplies(documentToken: string, lifetime: AbortSignal) {
   const thread = threadId(location.href);
   if (
     !thread ||
@@ -43,21 +43,12 @@ export function installThreadReplies(documentToken: string) {
   )
     return;
   const base = 'https://tieba.baidu.com/p/' + thread;
-  const host = document.createElement('div');
-  host.id = 'horitieba-thread-replies';
-  host.style.cssText =
-    'all:initial!important;position:fixed!important;bottom:12px!important;left:50%!important;transform:translateX(-50%)!important;width:min(660px,calc(100vw - 24px))!important;z-index:2147483000!important;';
-  // A closed shadow keeps the site out of the user's template and isolates the bar from site styles.
-  const shadow = host.attachShadow({ mode: 'closed' });
-  shadow.innerHTML = `<style>
-  *{box-sizing:border-box}section{padding:10px 14px;border:1px solid #dce3eb;border-radius:12px;background:#fff;box-shadow:0 3px 16px #1e304a26;color:#1d2939;font:14px/1.4 system-ui,sans-serif}
-  .line{display:flex;align-items:center;gap:10px}label{white-space:nowrap;font-weight:650}textarea{font:inherit;min-width:0;flex:1;border:1px solid #b7c4d3;border-radius:7px;padding:6px 9px;resize:vertical;height:34px;max-height:100px}textarea:focus{outline:2px solid #455dc0}button{border:0;border-radius:7px;padding:8px 13px;color:white;background:#374fb1;font:600 14px system-ui;white-space:nowrap;cursor:pointer}button:disabled{background:#d9dfeb;color:#647185;cursor:default}small{display:block;color:#526173;font-size:12px;margin-top:5px}button.skip{background:#edf1f8;color:#364563}button[hidden]{display:none}@media(max-width:480px){label{font-size:12px}.line{gap:5px}}
-  </style><section aria-label="HoriTieba 本帖自动回复"><div class="line"><label for="text">本帖自动回复</label><textarea id="text" rows="1" maxlength="2000" placeholder="输入你想回复的内容" aria-label="自动回复内容"></textarea><button class="main" disabled>开始</button><button class="skip" hidden>跳过此条</button></div><small role="status" aria-live="polite"></small></section>`;
-  document.body.append(host);
-  const input = shadow.querySelector('textarea')!,
-    button = shadow.querySelector<HTMLButtonElement>('.main')!,
-    skip = shadow.querySelector<HTMLButtonElement>('.skip')!,
-    status = shadow.querySelector('small')!;
+  const { input, button, skip, status, focus } = mountActionBar(
+    'horitieba-thread-replies',
+    '自动回复',
+    '回复本帖的评论和楼中楼',
+    lifetime,
+  );
   let run: ThreadReplyRun | null = null,
     controller: AbortController | undefined,
     busy = true;
@@ -80,7 +71,8 @@ export function installThreadReplies(documentToken: string) {
     skip.hidden = !unknown;
     if (active || unknown) input.value = run!.text;
     status.textContent =
-      (run ? '已回复 ' + run.sent + ' 条 · ' : '') + (message || run?.reason || promptText);
+      (run ? '已回复 ' + run.sent + ' 条 · ' : '') +
+      (message || run?.reason || (active ? '运行中' : ''));
   }
   const reloadOrGo = (to: string, signal: AbortSignal) => {
     signal.throwIfAborted();
@@ -192,6 +184,13 @@ export function installThreadReplies(documentToken: string) {
           show(
             '正在回复第 ' + floor.floor + ' 楼' + (target.id !== target.rootId ? '内的评论' : ''),
           );
+          for (;;) {
+            signal.throwIfAborted();
+            const due = await rpc<number>({ op: 'turn', run: r.id });
+            if (!due) break;
+            show('等待发送间隔');
+            await wait(Math.min(5000, Math.max(100, due - Date.now())), signal);
+          }
           const editor = await prepareReply(document, r, target, signal);
           editor.fill();
           const t = Date.now();
@@ -273,7 +272,9 @@ export function installThreadReplies(documentToken: string) {
   }
   async function restore() {
     try {
-      run = await rpc<ThreadReplyRun | null>({ op: 'state' });
+      const restored = await rpc<ThreadReplyRun | null>({ op: 'state' });
+      if (lifetime.aborted) return;
+      run = restored;
       busy = false;
       if (run) input.value = run.text;
       show();
@@ -309,6 +310,7 @@ export function installThreadReplies(documentToken: string) {
           throw Error('请确认已在这个 Chrome 标签页登录贴吧，然后刷新本帖。');
         });
         if (hasDraft(document)) throw Error('帖子里有草稿，请先处理草稿。');
+        lifetime.throwIfAborted();
         run = await rpc<ThreadReplyRun>({
           op: 'start',
           account,
@@ -359,12 +361,18 @@ export function installThreadReplies(documentToken: string) {
         })
         .catch(() => {});
     },
-    true,
+    { capture: true, signal: lifetime },
   );
-  addEventListener('pagehide', () => controller?.abort());
-  addEventListener('pageshow', (e) => {
-    if (e.persisted) void restore();
-  });
+  lifetime.addEventListener('abort', () => controller?.abort(), { once: true });
+  addEventListener('pagehide', () => controller?.abort(), { signal: lifetime });
+  addEventListener(
+    'pageshow',
+    (e) => {
+      if (e.persisted) void restore();
+    },
+    { signal: lifetime },
+  );
   show();
   void restore();
+  return focus;
 }

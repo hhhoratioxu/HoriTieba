@@ -1,6 +1,7 @@
 import { BlockedError, type PlatformAdapter } from '../platform';
 import type {
   Account,
+  Candidate,
   Config,
   Run,
   Task,
@@ -36,12 +37,42 @@ export class TiebaAdapter implements PlatformAdapter {
   }
   async readThreadCandidates(run: Run) {
     const generation = this.generation;
-    const scan = await this.tabs.scan(run.config.forum, run.config.realAction === 'auto');
+    const scan = await this.tabs.scan(
+      run.config.forum,
+      run.config.realAction === 'auto',
+      run.forumTabId === undefined || run.baseline,
+      run.forumTabId,
+    );
     if (!run.baseline || scan.blocking || !scan.reliable || run.config.realAction !== 'auto')
       return scan;
     let checked = 0;
     // Bound work per alarm. Pending observations remain eligible for later verification.
-    for (const c of scan.candidates) {
+    // Keep checking observed new posts even after they drop off the first list page.
+    const visible = new Map(scan.candidates.map((c) => [c.id, c]));
+    const pending =
+      run.forumTabId === undefined
+        ? []
+        : (await this.repo.db.getAllFromIndex('threads', 'runId', run.id))
+            .filter((t) => t.timeCheckPending && !t.taskId && !t.skipped)
+            .sort((a, b) => a.firstSeen - b.firstSeen);
+    const order = new Map<string, Candidate>();
+    for (const t of pending)
+      order.set(
+        t.id,
+        visible.get(t.id) ?? {
+          id: t.id,
+          title: t.title,
+          author: t.author,
+          authorId: t.authorId,
+          url: t.url,
+          kind: t.kind,
+          timeEvidence: 'unavailable',
+          timeCheckPending: true,
+          source: t.source,
+        },
+      );
+    for (const c of scan.candidates) order.set(c.id, c);
+    for (const c of order.values()) {
       if (generation !== this.generation) throw new BlockedError('检查已取消');
       if (filterThread(c, run.config)) continue;
       const prior = await this.repo.db.get('threads', `real:${run.config.forum}:${c.id}`);
@@ -50,7 +81,7 @@ export class TiebaAdapter implements PlatformAdapter {
         !(prior.runId === run.id && prior.timeCheckPending && !prior.taskId && !prior.skipped)
       )
         continue;
-      if (checked >= 2) continue;
+      if (checked >= 2) break;
       checked++;
       const view = await this.tabs.thread(c.url);
       if (
@@ -61,6 +92,7 @@ export class TiebaAdapter implements PlatformAdapter {
       )
         return { ...scan, blocking: '主题所属贴吧或登录身份不一致，已停止自动处理' };
       if (view.page.publishedAt !== undefined) {
+        if (!visible.has(c.id)) scan.candidates.push(c);
         c.publishedAt = view.page.publishedAt;
         c.timePrecisionMs = 60000;
         c.timeEvidence = 'verified';

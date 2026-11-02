@@ -1,3 +1,6 @@
+import { forumFromUrl } from '../shared/forum-comments';
+import { threadId } from '../shared/validation';
+import { installForumComments } from './forum-comments';
 import { installThreadReplies } from './thread-replies';
 import { readThreadCandidates, hasDraft, useLegacyPage } from '../adapters/tieba/read-page';
 import { legacyList, legacyThread } from '../adapters/tieba/legacy';
@@ -59,6 +62,15 @@ chrome.runtime.onMessage.addListener((raw, sender, respond) => {
     if ('documentToken' in r && r.documentToken !== documentToken)
       throw new PageNotReadyError('执行页已换成新文档');
     switch (r.type) {
+      case 'HORITIEBA_LOCATION_CHANGED':
+        mountForLocation();
+        return { ok: true };
+      case 'HORITIEBA_FORUM_CHANGED':
+        forumBar?.refresh();
+        return { updated: !!forumBar };
+      case 'HORITIEBA_FOCUS':
+        focusBar?.();
+        return { focused: !!focusBar };
       case 'HORITIEBA_CANCEL':
         driver.cancel(r.operationId);
         return { cancelled: true };
@@ -102,4 +114,25 @@ chrome.runtime.onMessage.addListener((raw, sender, respond) => {
   return respondToMessage(result, respond);
 });
 
-installThreadReplies(documentToken);
+let pageScope: string | undefined,
+  lifetime: AbortController | undefined,
+  focusBar: (() => void) | undefined;
+let forumBar: ReturnType<typeof installForumComments>;
+function mountForLocation() {
+  const forum = forumFromUrl(location.href),
+    thread = threadId(location.href);
+  const scope = forum ? 'forum:' + forum : thread ? 'thread:' + thread : '';
+  if (pageScope === scope) return;
+  lifetime?.abort();
+  pageScope = scope;
+  lifetime = new AbortController();
+  forumBar = forum ? installForumComments(lifetime.signal) : undefined;
+  focusBar =
+    forumBar?.focus ?? (thread ? installThreadReplies(documentToken, lifetime.signal) : undefined);
+}
+mountForLocation();
+addEventListener('popstate', mountForLocation);
+(window as Window & { navigation?: EventTarget }).navigation?.addEventListener(
+  'currententrychange',
+  mountForLocation,
+);

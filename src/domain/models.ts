@@ -168,6 +168,8 @@ export interface Attempt {
   reason?: string;
 }
 export interface Run {
+  /** Set only for a forum-page run. Its owner must remain on the same forum. */
+  forumTabId?: number;
   id: string;
   mode: Mode;
   status: 'running' | 'paused' | 'blocked' | 'stopped' | 'completed';

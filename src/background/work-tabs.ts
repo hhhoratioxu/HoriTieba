@@ -1,3 +1,5 @@
+import { forumFromUrl } from '../shared/forum-comments';
+import { consumeSlot } from './send-slot';
 import { forumUrl, normalizeForum, scanSchema } from '../shared/validation';
 import { uid, type Scan, type Target, type Run, type Step, type Attempt } from '../domain/models';
 import {
@@ -97,9 +99,15 @@ export class WorkTabs {
       documentToken: pageDocumentToken(response.documentToken),
     };
   }
-  async scan(forum: string, useLegacy = false, refresh = true) {
-    const saved = await chrome.storage.local.get('monitorTab');
-    let id = saved.monitorTab as number | undefined;
+  async forumPage(tabId: number, forum: string) {
+    if (forumFromUrl((await chrome.tabs.get(tabId)).url) !== forum) throw Error('已离开目标贴吧。');
+    const result = await this.read(tabId);
+    if (result.scan.forum !== forum) throw Error('当前页面的贴吧与目标不一致。');
+    return result;
+  }
+  async scan(forum: string, useLegacy = false, refresh = true, ownerTab?: number) {
+    let id =
+      ownerTab ?? ((await chrome.storage.local.get('monitorTab')).monitorTab as number | undefined);
     let created = false;
     let previousDocument: string | undefined;
     if (id !== undefined) {
@@ -107,7 +115,7 @@ export class WorkTabs {
       try {
         tab = await chrome.tabs.get(id);
       } catch {
-        await chrome.storage.local.remove('monitorTab');
+        if (ownerTab === undefined) await chrome.storage.local.remove('monitorTab');
         throw Error('监控标签页已关闭；继续后会创建一个新监控标签页');
       }
       if (!tab.url || !tab.url.startsWith('https://tieba.baidu.com/f'))
@@ -117,9 +125,15 @@ export class WorkTabs {
       const before = await this.read(id);
       if (before.draft) throw Error('监控标签页存在草稿，已停止刷新以保护输入');
       if (before.scan.blocking?.includes('安全验证')) return before.scan;
-      if (refresh) {
+      const params = new URL(tab.url).searchParams;
+      const filtered =
+        ownerTab !== undefined &&
+        (Number(params.get('pn') || 0) !== 0 ||
+          ['tab', 'cid', 'good', 'see_lz'].some((k) => params.has(k)));
+      if (refresh || filtered) {
         previousDocument = before.documentToken;
-        await chrome.tabs.reload(id);
+        if (filtered) await chrome.tabs.update(id, { url: forumUrl(forum) });
+        else await chrome.tabs.reload(id);
       }
     } else {
       const tab = await chrome.tabs.create({ url: forumUrl(forum), active: false });
@@ -368,6 +382,12 @@ export class WorkTabs {
     )
       return false;
     ticket.used = true;
+    const owner = (await repo.db.get('runs', ticket.runId))?.forumTabId;
+    if (owner !== undefined) {
+      const tab = await chrome.tabs.get(owner).catch(() => null);
+      const run = await repo.db.get('runs', ticket.runId);
+      if (!tab || forumFromUrl(tab.url) !== run?.config.forum) return false;
+    }
     return repo.atomic(async (tx) => {
       const a = await tx.objectStore('attempts').get(attemptId);
       const r = a ? await tx.objectStore('runs').get(a.runId) : undefined;
@@ -384,7 +404,7 @@ export class WorkTabs {
         r.epoch !== ticket.epoch ||
         r.config.realAction !== 'auto' ||
         r.account.id !== a.accountId ||
-        r.sendCount > r.config.maxSends ||
+        (r.forumTabId === undefined && r.sendCount > r.config.maxSends) ||
         step?.attemptId !== a.id ||
         step.status !== 'verifying' ||
         step.text !== a.text ||
@@ -392,6 +412,8 @@ export class WorkTabs {
       )
         return false;
       if (await tx.objectStore('meta').get(`clicked:${a.id}`)) return false;
+      if (r.forumTabId !== undefined && !(await consumeSlot(tx, a.accountId, a.id, Date.now())))
+        return false;
       await tx
         .objectStore('meta')
         .put({ id: `clicked:${a.id}`, value: { at: Date.now(), documentId: sender.documentId } });

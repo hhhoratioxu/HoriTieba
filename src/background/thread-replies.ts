@@ -1,3 +1,4 @@
+import { reserveSlot, consumeSlot, releaseSlot } from './send-slot';
 import type { Repository } from '../storage/database';
 import {
   matchesReply,
@@ -33,6 +34,7 @@ export class ThreadReplies {
       const meta = tx.objectStore('meta');
       const r = (await meta.get(threadRunKey))?.value as ThreadReplyRun | undefined;
       if (!r || (tab !== undefined && r.tab !== tab) || (url && threadId(url) === r.thread)) return;
+      await releaseSlot(tx, r.account, r.id);
       r.running = false;
       r.reason = r.pending
         ? '已停止，有一次发送待核实，原评论不会重发。'
@@ -40,7 +42,7 @@ export class ThreadReplies {
       await meta.put({ id: threadRunKey, value: r });
     });
   }
-  async handle(cmd: ThreadCommand, tab: number) {
+  async handle(cmd: ThreadCommand, tab: number, executionTab?: number) {
     return this.repo.atomic(async (tx) => {
       const meta = tx.objectStore('meta');
       let r = (await meta.get(threadRunKey))?.value as ThreadReplyRun | undefined;
@@ -58,9 +60,16 @@ export class ThreadReplies {
         const advanced = oldId ? await tx.objectStore('runs').get(oldId) : undefined;
         if (
           advanced?.config.realAction === 'auto' &&
+          advanced.forumTabId === undefined &&
           !['completed', 'stopped'].includes(advanced.status)
         )
           throw Error('请先在控制台停止原来的自动追评任务。');
+        if (
+          executionTab === tab &&
+          advanced?.forumTabId !== undefined &&
+          !['completed', 'stopped'].includes(advanced.status)
+        )
+          throw Error('这是自动评论的工作页。请在另一个标签页打开帖子后启动自动回复。');
         const last = Number((await meta.get('thread-reply:last:' + cmd.account))?.value ?? 0);
         return save({
           id: uid(),
@@ -78,6 +87,7 @@ export class ThreadReplies {
       const key = (id: string) =>
         'thread-reply:comment:' + r!.account + ':' + cmd.thread + ':' + id;
       if (cmd.op === 'stop' || cmd.op === 'pause') {
+        await releaseSlot(tx, r.account, r.id);
         r.running = false;
         r.reason =
           cmd.op === 'pause' ? cmd.reason : r.pending ? '已停止，刚才的回复仍需核实。' : '已停止';
@@ -121,6 +131,10 @@ export class ThreadReplies {
         r.pending.refreshed = true;
         return save(r);
       }
+      if (cmd.op === 'turn') {
+        if (r.pending) throw Error('上一次发送仍需核实。');
+        return reserveSlot(tx, r.account, r.id, now);
+      }
       if (cmd.op === 'seen') {
         const records = await Promise.all(cmd.ids.map((id) => meta.getKey(key(id))));
         return cmd.ids.filter((_, i) => records[i] !== undefined);
@@ -134,11 +148,12 @@ export class ThreadReplies {
         throw Error('发送间隔、账号或任务状态已改变。');
       const stamp = key(cmd.target.id);
       if (await meta.getKey(stamp)) throw Error('这条评论已经处理过。');
+      if (!(await consumeSlot(tx, r.account, r.id, now)))
+        throw Error('另一项发言正在进行，请稍后。');
       const id = uid();
       r.pending = { id, target: cmd.target, before: cmd.before, at: now, document: cmd.document };
       r.nextAt = now + replyInterval;
       await meta.add({ id: stamp, value: { attempt: id, at: now, status: 'pending' } });
-      await meta.put({ id: 'thread-reply:last:' + r.account, value: now });
       return save(r);
     });
   }
