@@ -1,0 +1,20 @@
+{
+  "environment": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "node": "v24.22.1",
+    "cpu": "Apple M1 Pro"
+  },
+  "dataset": {
+    "threads": 10000,
+    "logsImported": 2500,
+    "logsRetained": 2000,
+    "libraries": 5,
+    "itemsPerLibrary": 5000
+  },
+  "seedMs": 1699.962458,
+  "snapshotMs": 77.94845899999996,
+  "snapshotBytes": 11423,
+  "incrementalUpdateMeanMs": 14.043766700000015,
+  "note": "Node + fake-indexeddb 数据层测量；不代表真实浏览器帧率、内存泄漏或长期稳定性"
+}

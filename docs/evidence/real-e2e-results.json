@@ -1,0 +1,35 @@
+{
+  "browser": "156.0.8078.4",
+  "scope": "Real adapter against isolated local DOM fixtures; NO live Tieba submissions",
+  "externalRequestsBlocked": 19,
+  "results": [
+    {
+      "name": "真实适配账号预检与历史基线不发送",
+      "status": "passed"
+    },
+    {
+      "name": "发现新主题→读取一楼时间→真实适配首评→DOM 独立编号证据",
+      "status": "passed"
+    },
+    {
+      "name": "折叠楼层延迟未生成父编号时自动延期准备，未占追评额度、未点击，下一轮自动恢复",
+      "status": "passed"
+    },
+    {
+      "name": "关联自己的 pid→楼中楼发送→spid 核实→游标恰好推进一次",
+      "status": "passed"
+    },
+    {
+      "name": "无编号临时楼中楼不计成功，空草稿刷新后取得正式编号且不重发",
+      "status": "passed"
+    },
+    {
+      "name": "四个追评库依次执行，全部关联同一首评、独立编号及五库游标各推进一次",
+      "status": "passed"
+    },
+    {
+      "name": "重复调度与总量限制不追加发送",
+      "status": "passed"
+    }
+  ]
+}

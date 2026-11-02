@@ -1,0 +1,198 @@
+<!doctype html> <meta charset="utf-8" /><title>本机隔离测试帖</title>
+<style>
+  body {
+    min-height: 800px;
+  }
+  .l_post {
+    padding: 12px;
+  }
+  .j_lzl_container {
+    padding: 6px;
+  }
+  a,
+  button {
+    padding: 2px;
+  }
+  .lzl_single_post {
+    display: block;
+  }
+  .j_lzl_e_c[hidden] {
+    display: none;
+  }
+  [contenteditable] {
+    min-height: 20px;
+  }
+</style>
+<div id="com_userbar">
+  <a class="u_username_wrap" href="/home/main?id=tb.fixture.own">测试账号</a>
+  <li class="u_itieba"><a href="/home/main?id=tb.fixture.own">我的贴吧</a></li>
+</div>
+<div id="user_info">
+  <a class="media_left" href="/home/main?id=tb.fixture.own"
+    ><img src="https://himg.bdimg.com/sys/portrait/item/tb.fixture.own"
+  /></a>
+  <div class="user_name"><a href="/home/main?id=tb.fixture.own">测试账号</a></div>
+</div>
+<a id="tab_forumname" href="/f?kw=测试">看贴</a>
+<h3 class="core_title_txt">隔离测试帖</h3>
+<div id="j_p_postlist"></div>
+<div class="pb_list_pager"></div>
+<span class="l_reply_num">共2页</span>
+<script>
+  const tid = location.pathname.slice(3),
+    key = 'fixture:' + tid,
+    own = 'tb.fixture.own',
+    peer = 'tb.fixture.peer',
+    other = 'tb.fixture.other',
+    pn = Number(new URL(location.href).searchParams.get('pn') || 1);
+  const stamp = () =>
+    new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 16).replace('T', ' ');
+  const initial = [
+    { id: '903', root: '902', by: other, body: '楼中楼一' },
+    { id: '904', root: '902', by: other, body: '同一人的第二条' },
+    { id: '905', root: '902', by: own, to: other, body: '统一答复🙂' },
+    { id: '911', root: '910', by: other, body: '自己楼层下别人的回复' },
+  ];
+  const data = () =>
+    JSON.parse(localStorage.getItem(key) || JSON.stringify({ rows: initial, clicks: [] }));
+  const update = (s) => localStorage.setItem(key, JSON.stringify(s));
+  let current = {},
+    formTarget = {},
+    temporaryId;
+  const floors =
+    pn === 1
+      ? [
+          ['901', 1, other],
+          ['902', 2, peer],
+        ]
+      : [['910', 3, own]];
+  function renderFloor(id, no, author) {
+    const root = document.createElement('article');
+    root.className = 'l_post';
+    root.dataset.pid = id;
+    root.dataset.field = JSON.stringify({
+      author: { portrait: author },
+      content: {
+        post_id: id,
+        thread_id: tid,
+        post_no: no,
+        comment_num: data().rows.filter((c) => c.root === id).length,
+      },
+    });
+    root.innerHTML =
+      '<div class="d_author"><a class="p_author_name"></a></div><div class="d_post_content_main"><div class="d_post_content"></div><div class="core_reply"><div class="core_reply_tail"><span class="tail-info"></span><span class="tail-info"></span><a class="p_reply">回复</a></div><div class="j_lzl_container"></div></div></div>';
+    const a = root.querySelector('.p_author_name');
+    a.href = '/home/main?id=' + author;
+    a.textContent = '合成用户';
+    const body = root.querySelector('.d_post_content');
+    body.id = 'post_content_' + id;
+    body.textContent = no === 1 ? '主题正文' : '楼层文字';
+    const tail = root.querySelectorAll('.tail-info');
+    tail[0].textContent = no + '楼';
+    tail[1].textContent = stamp();
+    document.querySelector('#j_p_postlist').append(root);
+    renderPanel(root, 1);
+  }
+  function renderPanel(root, page) {
+    const id = root.dataset.pid,
+      list = data().rows.filter((c) => c.root === id),
+      p = root.querySelector('.j_lzl_container');
+    p.dataset.field = JSON.stringify({ pid: id, total_num: list.length });
+    p.replaceChildren();
+    current[id] = page;
+    for (const c of list.slice((page - 1) * 2, page * 2)) {
+      const el = document.createElement('li');
+      el.className = 'lzl_single_post';
+      el.dataset.field = JSON.stringify(
+        temporaryId === c.id ? { pid: id } : { pid: id, spid: c.id },
+      );
+      el.innerHTML =
+        '<a class="lzl_p_p"></a><div class="lzl_cnt"><a class="j_user_card">用户</a><span class="lzl_content_main"></span><span class="lzl_time"></span><a href="#" class="lzl_s_r">回复</a></div>';
+      for (const a of el.querySelectorAll('.lzl_p_p,.j_user_card'))
+        a.href = '/home/main?id=' + c.by;
+      const b = el.querySelector('.lzl_content_main');
+      if (c.to) {
+        const a = document.createElement('a');
+        a.className = 'at';
+        a.setAttribute('portrait', c.to);
+        a.textContent = '用户';
+        b.append('回复 ', a, ' :' + c.body);
+      } else b.textContent = c.body;
+      el.querySelector('.lzl_time').textContent = c.at || stamp();
+      p.append(el);
+    }
+    const total = Math.ceil(list.length / 2);
+    if (total > 1) {
+      const pg = document.createElement('span');
+      pg.className = 'lzl_pager j_pager';
+      for (let i = 1; i <= total; i++) {
+        const a = document.createElement(i === page ? 'span' : 'a');
+        a.textContent = i;
+        if (i === page) a.className = 'tP';
+        else a.setAttribute('href', '#' + i);
+        pg.append(a);
+      }
+      p.append(pg);
+    }
+    p.insertAdjacentHTML(
+      'beforeend',
+      '<a class="j_lzl_p" href="#">我也说一句</a><div class="j_lzl_e_c" hidden><div contenteditable="true"><p><br></p></div><button class="j_lzl_p_sb">发表</button></div>',
+    );
+  }
+  for (const f of floors) renderFloor(...f);
+  if (pn === 1)
+    document.querySelector('.pb_list_pager').innerHTML =
+      '<span class="tP">1</span><a href="?pn=2">下一页</a>';
+  else
+    document.querySelector('.pb_list_pager').innerHTML =
+      '<a href="?pn=1">首页</a><span class="tP">2</span>';
+  document.addEventListener('click', (e) => {
+    const root = e.target.closest('.l_post');
+    if (!root) return;
+    e.preventDefault();
+    const id = root.dataset.pid,
+      p = root.querySelector('.j_lzl_container');
+    if (e.target.closest('.lzl_pager a')) {
+      renderPanel(root, Number(e.target.getAttribute('href').slice(1)));
+      return;
+    }
+    if (e.target.matches('.j_lzl_p,.lzl_s_r,.p_reply')) {
+      const row = e.target.closest('.lzl_single_post'),
+        child = row ? JSON.parse(row.dataset.field).spid : null;
+      formTarget[id] = child ?? id;
+      const group = p.querySelector('.j_lzl_e_c');
+      group.hidden = false;
+      const editor = group.querySelector('[contenteditable]');
+      editor.replaceChildren();
+      if (child) {
+        const c = data().rows.find((c) => c.id === child),
+          s = document.createElement('span');
+        s.className = 'ubb_showname';
+        s.setAttribute('portrait', c.by);
+        s.setAttribute('use', 'reply');
+        s.textContent = '用户';
+        editor.append('回复\u00a0', s, '\u00a0:');
+      }
+    }
+    if (e.target.matches('.j_lzl_p_sb')) {
+      const selected = formTarget[id],
+        ed = p.querySelector('[contenteditable]'),
+        s = data(),
+        prefix = ed.querySelector('.ubb_showname');
+      const body = prefix ? ed.textContent.split(':').slice(1).join(':') : ed.innerText;
+      const c = {
+        id: String(10000 + s.clicks.length),
+        by: own,
+        root: id,
+        body,
+        to: prefix?.getAttribute('portrait'),
+        at: stamp(),
+      };
+      s.clicks.push({ root: id, selected, body, to: c.to ?? null, at: Date.now() });
+      if (!localStorage.getItem('fixture:drop')) s.rows.push(c);
+      if (s.clicks.length === 1) temporaryId = c.id;
+      update(s);
+      renderPanel(root, 1);
+    }
+  });
+</script>
